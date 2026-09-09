@@ -98,7 +98,8 @@ create table colleges (
 create table sections (
   id uuid primary key default gen_random_uuid(),
   college_id uuid not null references colleges(id) on delete cascade,
-  name text not null,
+  course text,
+  section_name text not null,
   year int,
   created_at timestamptz not null default now()
 );
@@ -145,6 +146,11 @@ create table timetable_slots (
   end_time time not null,
   subject text,
   room text,
+  -- set by POST /timetables/upload (backend/core/timetable_inserter.py):
+  -- who uploaded the timetable this slot was parsed from, and which parse
+  -- run it came from (so a bad upload's slots can be found/rolled back).
+  uploaded_by uuid references users(id) on delete set null,
+  source_json_id uuid,
   created_at timestamptz not null default now(),
   check (end_time > start_time)
 );
@@ -336,19 +342,6 @@ create table event_schedule_snapshots (
 );
 
 -- ============================================================
--- Migration: sections.course
---
--- Needed by POST /timetables/upload (backend/routers/timetables.py),
--- which parses {course, year, section} out of an uploaded timetable and
--- needs all three to find-or-create the right sections row.
--- ============================================================
-
-alter table sections add column if not exists course text;
-
-create unique index if not exists idx_sections_college_course_name_year
-  on sections (college_id, course, name, year);
-
--- ============================================================
 -- Indexes
 -- ============================================================
 
@@ -357,7 +350,11 @@ create index idx_users_section_id on users (section_id);
 create index idx_club_memberships_user_id on club_memberships (user_id);
 create index idx_club_memberships_club_id on club_memberships (club_id);
 create index idx_sections_college_id on sections (college_id);
+create unique index idx_sections_college_course_section_name_year
+  on sections (college_id, course, section_name, year);
 create index idx_timetable_slots_section_id on timetable_slots (section_id);
+create index idx_timetable_slots_uploaded_by on timetable_slots (uploaded_by);
+create index idx_timetable_slots_source_json_id on timetable_slots (source_json_id);
 create index idx_venues_college_id on venues (college_id);
 create index idx_events_club_id on events (club_id);
 create index idx_events_college_id on events (college_id);

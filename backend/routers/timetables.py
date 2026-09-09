@@ -18,7 +18,8 @@ import anthropic
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from core.config import get_anthropic_client, get_supabase_client
+from core.config import get_anthropic_client
+from core.timetable_inserter import insert_timetable_into_db
 
 router = APIRouter(prefix="/timetables", tags=["timetables"])
 
@@ -117,13 +118,6 @@ def get_current_user_id() -> Optional[str]:
     return None
 
 
-def _claude_day_to_storage_day(claude_day: int) -> int:
-    """Convert the prompt's day-of-week (0=Sunday..6=Saturday) to the
-    convention used by timetable_slots / backend.core.scheduler.weekday()
-    (0=Monday..6=Sunday, i.e. Python's date.weekday())."""
-    return (claude_day + 6) % 7
-
-
 def _build_content_blocks(file: Optional[UploadFile], text: Optional[str]) -> list[dict]:
     if file is not None:
         contents = file.file.read()
@@ -165,68 +159,6 @@ def _build_content_blocks(file: Optional[UploadFile], text: Optional[str]) -> li
         )
 
     return [{"type": "text", "text": text}]
-
-
-def insert_timetable_into_db(
-    parsed: ParsedTimetable, college_id: str, uploaded_by: Optional[str]
-) -> dict:
-    # TODO: once auth exists, record `uploaded_by` (e.g. on an audit table,
-    # or a created_by column on sections) — currently unused.
-    del uploaded_by
-
-    client = get_supabase_client()
-
-    existing = (
-        client.table("sections")
-        .select("id")
-        .eq("college_id", college_id)
-        .eq("course", parsed.course)
-        .eq("name", parsed.section)
-        .eq("year", parsed.year)
-        .limit(1)
-        .execute()
-    )
-
-    if existing.data:
-        section_id = existing.data[0]["id"]
-        sections_created = 0
-    else:
-        inserted = (
-            client.table("sections")
-            .insert(
-                {
-                    "college_id": college_id,
-                    "course": parsed.course,
-                    "name": parsed.section,
-                    "year": parsed.year,
-                }
-            )
-            .execute()
-        )
-        section_id = inserted.data[0]["id"]
-        sections_created = 1
-
-    slot_rows = [
-        {
-            "section_id": section_id,
-            "day_of_week": _claude_day_to_storage_day(slot.day_of_week),
-            "start_time": slot.start_time,
-            "end_time": slot.end_time,
-            "subject": slot.subject,
-        }
-        for slot in parsed.slots
-    ]
-    # NOTE: re-uploading the same timetable currently duplicates slot rows —
-    # there's no uniqueness constraint on timetable_slots yet. TODO: add one
-    # (or upsert) once dedup semantics are decided.
-    if slot_rows:
-        client.table("timetable_slots").insert(slot_rows).execute()
-
-    return {
-        "section_id": section_id,
-        "sections_created": sections_created,
-        "slots_inserted": len(slot_rows),
-    }
 
 
 @router.post("/upload")
@@ -272,7 +204,9 @@ def upload_timetable(
             detail={"error": "invalid timetable JSON", "reason": "model did not return structured output"},
         )
 
-    result = insert_timetable_into_db(parsed, college_id=college_id, uploaded_by=current_user)
+    result = insert_timetable_into_db(
+        parsed_json=parsed.model_dump(), college_id=college_id, uploaded_by_user_id=current_user
+    )
 
     return {
         "status": "success",
@@ -282,4 +216,5 @@ def upload_timetable(
         "year": parsed.year,
         "section": parsed.section,
         "parsed_slots": [slot.model_dump() for slot in parsed.slots],
+        "source_json_id": result["source_json_id"],
     }

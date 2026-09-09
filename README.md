@@ -74,9 +74,11 @@ flutter run --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...
   detection algorithm is fully implemented, with unit tests in
   `backend/tests/test_scheduler.py`.
 - `POST /api/timetables/upload` — parses an uploaded timetable (image,
-  PDF, or pasted text) via the Claude API into `sections` /
+  PDF, or pasted text) via the Claude API, then hands the result to
+  `backend/core/timetable_inserter.py` to write `sections` /
   `timetable_slots`. Tests in `backend/tests/test_timetables_upload.py`
-  (mocked — they don't call the real Claude API).
+  and `backend/tests/test_timetable_inserter.py` (mocked — no real
+  Claude API calls or database).
 - Everything else (auth, clubs, events, the rest of timetables,
   attendance, budgets routers; budget total/balance calculations;
   frontend screens) is stubbed — routes return "not implemented", and
