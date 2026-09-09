@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
@@ -22,6 +23,10 @@ const List<String> _dayNames = [
   'Friday',
   'Saturday',
 ];
+
+/// Where a day falls in a Monday-first week, for display order only
+/// (0=Monday..6=Sunday) — the API's own 0=Sunday convention is untouched.
+int _weekOrder(int dayOfWeekSundayZero) => (dayOfWeekSundayZero + 6) % 7;
 
 enum _InputMode { file, text }
 
@@ -81,6 +86,21 @@ class TimetablePreview {
       sourceJsonId: json['source_json_id'] as String,
     );
   }
+
+  /// Slots grouped by day and sorted for display: Monday-first week order,
+  /// then by start time within each day.
+  List<MapEntry<int, List<ParsedSlotPreview>>> get groupedByDay {
+    final byDay = <int, List<ParsedSlotPreview>>{};
+    for (final slot in slots) {
+      byDay.putIfAbsent(slot.dayOfWeek, () => []).add(slot);
+    }
+    for (final daySlots in byDay.values) {
+      daySlots.sort((a, b) => a.startTime.compareTo(b.startTime));
+    }
+    final entries = byDay.entries.toList()
+      ..sort((a, b) => _weekOrder(a.key).compareTo(_weekOrder(b.key)));
+    return entries;
+  }
 }
 
 /// Lets an admin upload a timetable (image, PDF, or pasted text), preview
@@ -109,6 +129,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
   String? _selectedCollegeId;
   List<Map<String, dynamic>> _colleges = [];
   bool _loadingColleges = true;
+  String? _collegesError;
 
   _InputMode _inputMode = _InputMode.file;
   PlatformFile? _pickedFile;
@@ -133,6 +154,10 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
   }
 
   Future<void> _loadColleges() async {
+    setState(() {
+      _loadingColleges = true;
+      _collegesError = null;
+    });
     try {
       final rows =
           await supabase.from('colleges').select('id, name').order('name', ascending: true);
@@ -148,7 +173,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
       if (!mounted) return;
       setState(() {
         _loadingColleges = false;
-        _errorMessage = 'Could not load colleges: $e';
+        _collegesError = 'Could not load colleges: $e';
       });
     }
   }
@@ -223,6 +248,15 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
           if (error != null) {
             return reason != null ? '$error: $reason' : '$error';
           }
+        }
+        if (detail is List && detail.isNotEmpty) {
+          // FastAPI's default request-validation shape:
+          // {"detail": [{"loc": [...], "msg": "...", ...}, ...]}
+          final messages = detail
+              .map((e) => e is Map ? e['msg']?.toString() : e.toString())
+              .whereType<String>()
+              .toList();
+          if (messages.isNotEmpty) return messages.join('; ');
         }
       }
     } catch (_) {
@@ -341,44 +375,155 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
     }
   }
 
+  void _editAgain() => setState(() => _preview = null);
+
   void _back() => Navigator.of(context).pop();
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Upload Timetable')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (_errorMessage != null) _buildErrorBanner(),
-            _buildDetailsForm(),
-            const SizedBox(height: 24),
-            if (_preview == null) ...[
-              _buildInputSection(),
-              const SizedBox(height: 24),
-              _buildParseButton(),
-            ] else
-              _buildPreview(),
-          ],
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isWide = constraints.maxWidth >= 720;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: isWide ? 640 : double.infinity),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_errorMessage != null) ...[
+                        _buildErrorBanner(),
+                        const SizedBox(height: 16),
+                      ],
+                      _sectionCard(
+                        step: 1,
+                        title: 'Timetable details',
+                        subtitle: 'For your reference — the AI reads these from the upload itself.',
+                        child: _buildDetailsForm(),
+                      ),
+                      const SizedBox(height: 16),
+                      if (_preview == null) ...[
+                        _sectionCard(
+                          step: 2,
+                          title: 'Timetable source',
+                          subtitle: 'Upload a file or paste the timetable as text.',
+                          child: _buildInputSection(),
+                        ),
+                        const SizedBox(height: 20),
+                        _buildParseButton(),
+                      ] else ...[
+                        _sectionCard(
+                          step: 2,
+                          title: 'Review parsed timetable',
+                          subtitle: null,
+                          trailing: TextButton.icon(
+                            onPressed: _isSaving ? null : _editAgain,
+                            icon: const Icon(Icons.edit_outlined, size: 18),
+                            label: const Text('Edit'),
+                          ),
+                          child: _buildPreview(),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
   }
 
   Widget _buildErrorBanner() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.errorContainer,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Text(
-          _errorMessage!,
-          style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline, color: scheme.onErrorContainer, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _errorMessage!,
+              style: TextStyle(color: scheme.onErrorContainer),
+            ),
+          ),
+          InkWell(
+            onTap: () => setState(() => _errorMessage = null),
+            borderRadius: BorderRadius.circular(16),
+            child: Icon(Icons.close, color: scheme.onErrorContainer, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// A numbered section card — gives the form a step-by-step feel without a
+  /// full wizard/stepper widget.
+  Widget _sectionCard({
+    required int step,
+    required String title,
+    String? subtitle,
+    Widget? trailing,
+    required Widget child,
+  }) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 13,
+                  backgroundColor: theme.colorScheme.primaryContainer,
+                  child: Text(
+                    '$step',
+                    style: TextStyle(
+                      color: theme.colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(title, style: theme.textTheme.titleMedium),
+                ),
+                if (trailing != null) trailing,
+              ],
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.only(left: 38),
+                child: Text(
+                  subtitle,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            child,
+          ],
         ),
       ),
     );
@@ -389,52 +534,112 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Timetable details', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
         TextField(
           controller: _courseController,
           enabled: !locked,
+          textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(
             labelText: 'Course',
             hintText: 'e.g. Physics Hons',
+            prefixIcon: Icon(Icons.school_outlined),
           ),
         ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<int>(
-          initialValue: _selectedYear,
-          decoration: const InputDecoration(labelText: 'Year'),
-          items: const [1, 2, 3]
-              .map((y) => DropdownMenuItem(value: y, child: Text('Year $y')))
-              .toList(),
-          onChanged: locked ? null : (v) => setState(() => _selectedYear = v),
+        const SizedBox(height: 14),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<int>(
+                initialValue: _selectedYear,
+                decoration: const InputDecoration(
+                  labelText: 'Year',
+                  prefixIcon: Icon(Icons.numbers),
+                ),
+                items: const [1, 2, 3]
+                    .map((y) => DropdownMenuItem(value: y, child: Text('Year $y')))
+                    .toList(),
+                onChanged: locked ? null : (v) => setState(() => _selectedYear = v),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: TextField(
+                controller: _sectionController,
+                enabled: !locked,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: 'Section',
+                  hintText: 'e.g. B',
+                  prefixIcon: Icon(Icons.class_outlined),
+                ),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _sectionController,
-          enabled: !locked,
-          decoration: const InputDecoration(
-            labelText: 'Section',
-            hintText: 'e.g. B',
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_loadingColleges)
-          const LinearProgressIndicator()
-        else
-          DropdownButtonFormField<String>(
-            initialValue: _selectedCollegeId,
-            decoration: const InputDecoration(labelText: 'College'),
-            items: _colleges
-                .map(
-                  (c) => DropdownMenuItem<String>(
-                    value: c['id'] as String,
-                    child: Text((c['name'] as String?) ?? c['id'] as String),
-                  ),
-                )
-                .toList(),
-            onChanged: locked ? null : (v) => setState(() => _selectedCollegeId = v),
-          ),
+        const SizedBox(height: 14),
+        _buildCollegeField(locked),
       ],
+    );
+  }
+
+  Widget _buildCollegeField(bool locked) {
+    if (_loadingColleges) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 12),
+            Text('Loading colleges...'),
+          ],
+        ),
+      );
+    }
+
+    if (_collegesError != null) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                _collegesError!,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            TextButton(onPressed: _loadColleges, child: const Text('Retry')),
+          ],
+        ),
+      );
+    }
+
+    return DropdownButtonFormField<String>(
+      initialValue: _selectedCollegeId,
+      decoration: const InputDecoration(
+        labelText: 'College',
+        prefixIcon: Icon(Icons.location_city_outlined),
+      ),
+      isExpanded: true,
+      items: _colleges
+          .map(
+            (c) => DropdownMenuItem<String>(
+              value: c['id'] as String,
+              child: Text(
+                (c['name'] as String?) ?? c['id'] as String,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          )
+          .toList(),
+      onChanged: locked ? null : (v) => setState(() => _selectedCollegeId = v),
     );
   }
 
@@ -442,25 +647,25 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Timetable source', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
         SegmentedButton<_InputMode>(
+          showSelectedIcon: false,
           segments: const [
             ButtonSegment(
               value: _InputMode.file,
               label: Text('Upload file'),
-              icon: Icon(Icons.upload_file),
+              icon: Icon(Icons.upload_file_outlined),
             ),
             ButtonSegment(
               value: _InputMode.text,
               label: Text('Paste text'),
-              icon: Icon(Icons.text_snippet),
+              icon: Icon(Icons.text_snippet_outlined),
             ),
           ],
           selected: {_inputMode},
           onSelectionChanged: (selection) {
             setState(() {
               _inputMode = selection.first;
+              _errorMessage = null;
               // enforce "pick one" — clear the other input when switching
               if (_inputMode == _InputMode.file) {
                 _textController.clear();
@@ -470,89 +675,208 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
             });
           },
         ),
-        const SizedBox(height: 12),
-        if (_inputMode == _InputMode.file)
-          OutlinedButton.icon(
-            onPressed: _pickFile,
-            icon: const Icon(Icons.attach_file),
-            label: Text(
-              _pickedFile == null ? 'Choose file (.jpg, .png, .pdf)' : _pickedFile!.name,
-              overflow: TextOverflow.ellipsis,
-            ),
-          )
-        else
-          TextField(
-            controller: _textController,
-            maxLines: 6,
-            decoration: const InputDecoration(
-              hintText: 'Paste timetable text here...',
-              border: OutlineInputBorder(),
-            ),
-          ),
+        const SizedBox(height: 14),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 150),
+          child: _inputMode == _InputMode.file
+              ? _buildFilePicker(key: const ValueKey('file'))
+              : TextField(
+                  key: const ValueKey('text'),
+                  controller: _textController,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    hintText: 'Paste timetable text here...',
+                    border: OutlineInputBorder(),
+                    alignLabelWithHint: true,
+                  ),
+                ),
+        ),
       ],
     );
   }
 
-  Widget _buildParseButton() {
-    return FilledButton(
-      onPressed: _isParsing ? null : _parseTimetable,
-      child: _isParsing
-          ? const Row(
-              mainAxisSize: MainAxisSize.min,
+  Widget _buildFilePicker({Key? key}) {
+    final theme = Theme.of(context);
+    if (_pickedFile == null) {
+      return InkWell(
+        key: key,
+        onTap: _pickFile,
+        borderRadius: BorderRadius.circular(12),
+        child: DottedBorderBox(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 28),
+            child: Column(
               children: [
-                SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                Icon(Icons.cloud_upload_outlined, size: 32, color: theme.colorScheme.primary),
+                const SizedBox(height: 8),
+                Text('Tap to choose a file', style: theme.textTheme.bodyMedium),
+                const SizedBox(height: 2),
+                Text(
+                  '.jpg, .png, or .pdf — max 5MB',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
-                SizedBox(width: 12),
-                Text('Parsing with AI...'),
               ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      key: key,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(_iconForFile(_pickedFile!.extension), color: theme.colorScheme.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _pickedFile!.name,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  _formatBytes(_pickedFile!.size),
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Choose a different file',
+            onPressed: _pickFile,
+            icon: const Icon(Icons.swap_horiz),
+          ),
+          IconButton(
+            tooltip: 'Remove file',
+            onPressed: () => setState(() => _pickedFile = null),
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _iconForFile(String? extension) {
+    switch (extension?.toLowerCase()) {
+      case 'pdf':
+        return Icons.picture_as_pdf_outlined;
+      default:
+        return Icons.image_outlined;
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  Widget _buildParseButton() {
+    return FilledButton.icon(
+      onPressed: _isParsing ? null : _parseTimetable,
+      icon: _isParsing
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
             )
-          : const Text('Parse Timetable'),
+          : const Icon(Icons.auto_awesome),
+      label: Text(_isParsing ? 'Parsing with AI...' : 'Parse Timetable'),
+      style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
     );
   }
 
   Widget _buildPreview() {
     final preview = _preview!;
+    final grouped = preview.groupedByDay;
+    final theme = Theme.of(context);
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          '${preview.slots.length} slots parsed for ${preview.course} '
-          'Year ${preview.year} Section ${preview.section}',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        const SizedBox(height: 12),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
-            columns: const [
-              DataColumn(label: Text('Day')),
-              DataColumn(label: Text('Start Time')),
-              DataColumn(label: Text('End Time')),
-              DataColumn(label: Text('Subject')),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primaryContainer.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.fact_check_outlined, color: theme.colorScheme.primary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${preview.slots.length} slot${preview.slots.length == 1 ? '' : 's'} parsed',
+                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      '${preview.course} · Year ${preview.year} · Section ${preview.section}',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
             ],
-            rows: preview.slots
-                .map(
-                  (slot) => DataRow(
-                    cells: [
-                      DataCell(Text(_dayNames[slot.dayOfWeek])),
-                      DataCell(Text(slot.startTime)),
-                      DataCell(Text(slot.endTime)),
-                      DataCell(Text(slot.subject ?? '—')),
-                    ],
-                  ),
-                )
-                .toList(),
           ),
         ),
-        const SizedBox(height: 8),
-        Text(
-          'source_json_id: ${preview.sourceJsonId}',
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+        const SizedBox(height: 16),
+        if (grouped.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text(
+                'No time slots were found. Try a clearer photo, or paste the\n'
+                'timetable as text instead.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+          )
+        else
+          ...grouped.map((entry) => _buildDayGroup(entry.key, entry.value)),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.tag, size: 14, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Flexible(
+              child: SelectableText(
+                preview.sourceJsonId,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant, fontSize: 11),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Copy id',
+              iconSize: 14,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.copy),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: preview.sourceJsonId));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Copied id to clipboard'), duration: Duration(seconds: 1)),
+                );
+              },
+            ),
+          ],
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
         Row(
           children: [
             Expanded(
@@ -563,15 +887,17 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
             ),
             const SizedBox(width: 16),
             Expanded(
-              child: FilledButton(
+              flex: 2,
+              child: FilledButton.icon(
                 onPressed: _isSaving ? null : _confirmAndSave,
-                child: _isSaving
+                icon: _isSaving
                     ? const SizedBox(
                         width: 16,
                         height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
-                    : const Text('Confirm & Save'),
+                    : const Icon(Icons.check),
+                label: Text(_isSaving ? 'Saving...' : 'Confirm & Save'),
               ),
             ),
           ],
@@ -579,4 +905,116 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
       ],
     );
   }
+
+  Widget _buildDayGroup(int dayOfWeek, List<ParsedSlotPreview> slots) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+              _dayNames[dayOfWeek],
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ...slots.map(
+            (slot) => Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.schedule, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 108,
+                    child: Text(
+                      '${slot.startTime} – ${slot.endTime}',
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      slot.subject ?? 'Unlabeled',
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontStyle: slot.subject == null ? FontStyle.italic : FontStyle.normal,
+                        color: slot.subject == null ? theme.colorScheme.onSurfaceVariant : null,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A lightweight dashed-border drop-zone look for the file picker tap
+/// target, without pulling in an extra package just for this.
+class DottedBorderBox extends StatelessWidget {
+  const DottedBorderBox({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _DashedBorderPainter(color: Theme.of(context).colorScheme.outlineVariant),
+      child: child,
+    );
+  }
+}
+
+class _DashedBorderPainter extends CustomPainter {
+  _DashedBorderPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      const Radius.circular(12),
+    );
+    final path = Path()..addRRect(rrect);
+    final dashed = _dashPath(path, dashLength: 6, gapLength: 4);
+    canvas.drawPath(dashed, paint);
+  }
+
+  Path _dashPath(Path source, {required double dashLength, required double gapLength}) {
+    final dest = Path();
+    for (final metric in source.computeMetrics()) {
+      var distance = 0.0;
+      var draw = true;
+      while (distance < metric.length) {
+        final length = draw ? dashLength : gapLength;
+        if (draw) {
+          dest.addPath(metric.extractPath(distance, distance + length), Offset.zero);
+        }
+        distance += length;
+        draw = !draw;
+      }
+    }
+    return dest;
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedBorderPainter oldDelegate) => oldDelegate.color != color;
 }

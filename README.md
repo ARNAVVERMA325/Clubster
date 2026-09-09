@@ -74,6 +74,13 @@ flutter run \
 `API_BASE_URL` points the app at the FastAPI backend above (defaults to
 `http://localhost:8000/api` if omitted).
 
+Run tests:
+
+```bash
+cd frontend
+flutter test
+```
+
 ## What's implemented vs. stubbed
 
 - `backend/core/scheduler.py` — the event slot suggestion + clash
@@ -89,11 +96,18 @@ flutter run \
   `backend/tests/test_timetable_inserter.py` (mocked — no real Claude
   API calls or database).
 - `frontend/lib/screens/admin/timetable_upload_screen.dart` — the admin
-  UI for the flow above: fill in details, upload/paste a timetable,
-  review the parsed table, then confirm. Wired in from the Admin tab.
-  `flutter analyze` passes clean; it has not been run against a real
-  device/browser (no `flutter run`), so the *logic* (build, types, lints)
-  is verified but the actual UX/UI isn't.
+  UI for the flow above, designed as three numbered steps (details ->
+  source -> review), with a grouped-by-day preview, inline validation,
+  and a lightweight "Edit" affordance to correct details without leaving
+  the screen. Wired in from the Admin tab (`admin_screen.dart`).
+  `flutter analyze` is clean, `flutter build web` compiles, and
+  `frontend/test/widget_test.dart` covers rendering, client-side
+  validation, and navigation (mocking nothing but the network — Supabase
+  is intentionally left uninitialized in tests, which exercises the same
+  error-handling path a real load failure would hit). Still not run
+  interactively in a browser/device, so real device rendering, the
+  native file-picker dialog, and the actual Claude/Supabase round-trip
+  are unverified.
 - Everything else (auth, clubs, events, the rest of timetables,
   attendance, budgets routers; budget total/balance calculations; other
   frontend screens) is stubbed — routes return "not implemented", and
