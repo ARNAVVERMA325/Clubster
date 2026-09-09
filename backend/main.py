@@ -18,12 +18,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
-app.include_router(clubs.router)
-app.include_router(events.router)
-app.include_router(timetables.router)
-app.include_router(attendance.router)
-app.include_router(budgets.router)
+# Mounted under /api so route paths match the ones referenced elsewhere
+# (e.g. POST /api/timetables/upload); /health is deliberately left outside.
+app.include_router(auth.router, prefix="/api")
+app.include_router(clubs.router, prefix="/api")
+app.include_router(events.router, prefix="/api")
+app.include_router(timetables.router, prefix="/api")
+app.include_router(attendance.router, prefix="/api")
+app.include_router(budgets.router, prefix="/api")
 
 
 @app.get("/health")

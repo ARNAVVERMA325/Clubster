@@ -31,9 +31,12 @@ scheduling algorithm (see below) is intentionally left as `TODO`s.
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp ../.env.example .env   # fill in your Supabase project values
+cp ../.env.example .env   # fill in your Supabase + Anthropic values
 uvicorn main:app --reload --port 8000
 ```
+
+All routes are mounted under `/api` (e.g. `POST /api/timetables/upload`),
+except `/health`.
 
 Run tests:
 
@@ -70,10 +73,14 @@ flutter run --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...
 - `backend/core/scheduler.py` — the event slot suggestion + clash
   detection algorithm is fully implemented, with unit tests in
   `backend/tests/test_scheduler.py`.
-- Everything else (auth, clubs, events, timetables, attendance, budgets
-  routers; budget total/balance calculations; frontend screens) is
-  stubbed — routes return "not implemented", and `TODO` comments mark
-  where real logic goes.
+- `POST /api/timetables/upload` — parses an uploaded timetable (image,
+  PDF, or pasted text) via the Claude API into `sections` /
+  `timetable_slots`. Tests in `backend/tests/test_timetables_upload.py`
+  (mocked — they don't call the real Claude API).
+- Everything else (auth, clubs, events, the rest of timetables,
+  attendance, budgets routers; budget total/balance calculations;
+  frontend screens) is stubbed — routes return "not implemented", and
+  `TODO` comments mark where real logic goes.
 
 ## License
 

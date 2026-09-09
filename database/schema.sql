@@ -336,6 +336,19 @@ create table event_schedule_snapshots (
 );
 
 -- ============================================================
+-- Migration: sections.course
+--
+-- Needed by POST /timetables/upload (backend/routers/timetables.py),
+-- which parses {course, year, section} out of an uploaded timetable and
+-- needs all three to find-or-create the right sections row.
+-- ============================================================
+
+alter table sections add column if not exists course text;
+
+create unique index if not exists idx_sections_college_course_name_year
+  on sections (college_id, course, name, year);
+
+-- ============================================================
 -- Indexes
 -- ============================================================
 
