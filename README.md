@@ -91,9 +91,9 @@ flutter run \
 - `frontend/lib/screens/admin/timetable_upload_screen.dart` — the admin
   UI for the flow above: fill in details, upload/paste a timetable,
   review the parsed table, then confirm. Wired in from the Admin tab.
-  **Not compiled/run** — this scaffold was built in an environment
-  without the Flutter SDK, so it's only had a careful manual read-through,
-  not `flutter analyze`/`flutter run`.
+  `flutter analyze` passes clean; it has not been run against a real
+  device/browser (no `flutter run`), so the *logic* (build, types, lints)
+  is verified but the actual UX/UI isn't.
 - Everything else (auth, clubs, events, the rest of timetables,
   attendance, budgets routers; budget total/balance calculations; other
   frontend screens) is stubbed — routes return "not implemented", and
