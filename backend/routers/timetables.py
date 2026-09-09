@@ -3,15 +3,20 @@
 `/section/{section_id}` and `/overrides` are still stubs — TODO: implement
 against timetable_slots and user_timetable_overrides.
 
-`/upload` is fully implemented: it sends an uploaded timetable (image, PDF,
-or pasted text) to Claude, validates the structured result, and writes it
-into `sections` / `timetable_slots`.
+`/upload` sends an uploaded timetable (image, PDF, or pasted text) to
+Claude and validates the structured result. With `dry_run=true` it
+returns the parsed slots for admin review without writing to the
+database; otherwise it inserts immediately via
+core.timetable_inserter.insert_timetable_into_db. `/confirm` takes JSON
+previously returned by a dry_run call and inserts it — no second Claude
+call.
 """
 
 from __future__ import annotations
 
 import base64
 import re
+import uuid
 from typing import Optional
 
 import anthropic
@@ -20,6 +25,8 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from core.config import get_anthropic_client
 from core.timetable_inserter import insert_timetable_into_db
+
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 router = APIRouter(prefix="/timetables", tags=["timetables"])
 
@@ -121,6 +128,9 @@ def get_current_user_id() -> Optional[str]:
 def _build_content_blocks(file: Optional[UploadFile], text: Optional[str]) -> list[dict]:
     if file is not None:
         contents = file.file.read()
+        if len(contents) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=400, detail="File too large. Max 5MB.")
+
         content_type = file.content_type or ""
         filename = (file.filename or "").lower()
 
@@ -166,6 +176,7 @@ def upload_timetable(
     college_id: str = Form(...),
     file: Optional[UploadFile] = File(default=None),
     text: Optional[str] = Form(default=None),
+    dry_run: bool = Form(default=False),
     current_user: Optional[str] = Depends(get_current_user_id),
 ):
     if file is None and not (text and text.strip()):
@@ -204,8 +215,26 @@ def upload_timetable(
             detail={"error": "invalid timetable JSON", "reason": "model did not return structured output"},
         )
 
+    # Generated at parse time (not insert time) so a dry_run preview and
+    # the confirm call that follows it can be tied together — the admin
+    # reviews slots tagged with this id, then POSTs it back to /confirm.
+    source_json_id = str(uuid.uuid4())
+
+    if dry_run:
+        return {
+            "status": "preview",
+            "course": parsed.course,
+            "year": parsed.year,
+            "section": parsed.section,
+            "parsed_slots": [slot.model_dump() for slot in parsed.slots],
+            "source_json_id": source_json_id,
+        }
+
     result = insert_timetable_into_db(
-        parsed_json=parsed.model_dump(), college_id=college_id, uploaded_by_user_id=current_user
+        parsed_json=parsed.model_dump(),
+        college_id=college_id,
+        uploaded_by_user_id=current_user,
+        source_json_id=source_json_id,
     )
 
     return {
@@ -216,5 +245,41 @@ def upload_timetable(
         "year": parsed.year,
         "section": parsed.section,
         "parsed_slots": [slot.model_dump() for slot in parsed.slots],
+        "source_json_id": result["source_json_id"],
+    }
+
+
+# ============================================================
+# POST /timetables/confirm
+#
+# Takes the JSON an admin already previewed (via /upload?dry_run=true)
+# and inserts it — no Claude call here, so confirming can't produce a
+# different result than what was shown, and doesn't cost a second
+# generation.
+# ============================================================
+
+
+class ConfirmTimetableRequest(ParsedTimetable):
+    college_id: str = Field(min_length=1)
+    source_json_id: Optional[str] = None
+
+
+@router.post("/confirm")
+def confirm_timetable(
+    payload: ConfirmTimetableRequest,
+    current_user: Optional[str] = Depends(get_current_user_id),
+):
+    result = insert_timetable_into_db(
+        parsed_json=payload.model_dump(exclude={"college_id", "source_json_id"}),
+        college_id=payload.college_id,
+        uploaded_by_user_id=current_user,
+        source_json_id=payload.source_json_id,
+    )
+
+    return {
+        "status": "success",
+        "sections_created": result["sections_created"],
+        "slots_inserted": result["slots_inserted"],
+        "section_id": result["section_id"],
         "source_json_id": result["source_json_id"],
     }

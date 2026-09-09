@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 from supabase import Client
 from datetime import time
 import uuid
@@ -16,7 +16,8 @@ def _claude_day_to_storage_day(claude_day: int) -> int:
 def insert_timetable_into_db(
     parsed_json: Dict,
     college_id: str,
-    uploaded_by_user_id: str
+    uploaded_by_user_id: str,
+    source_json_id: Optional[str] = None
 ) -> Dict:
     """
     Insert parsed timetable into sections and timetable_slots tables.
@@ -34,12 +35,17 @@ def insert_timetable_into_db(
         }
         college_id: UUID of the college
         uploaded_by_user_id: UUID of the admin uploading
+        source_json_id: identifier for the parse run this timetable came
+            from. Pass the id from a prior preview (dry_run) call so the
+            confirmed rows carry the same traceability id the admin
+            reviewed; if omitted, a fresh one is generated.
 
     Returns:
         {
             "sections_created": 0 or 1,
             "slots_inserted": N,
-            "section_id": uuid
+            "section_id": uuid,
+            "source_json_id": uuid
         }
     """
     from core.config import get_supabase_client
@@ -70,7 +76,7 @@ def insert_timetable_into_db(
         sections_created = 1
 
     # Step 2: Insert timetable_slots
-    source_json_id = str(uuid.uuid4())
+    source_json_id = source_json_id or str(uuid.uuid4())
     slots_to_insert = []
 
     for slot in slots:

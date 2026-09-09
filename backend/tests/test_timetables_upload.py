@@ -160,3 +160,110 @@ def test_upload_returns_502_on_anthropic_api_error(monkeypatch):
     )
 
     assert response.status_code == 502
+
+
+def test_upload_file_over_5mb_rejected():
+    # size is checked before Claude is ever called, so no anthropic mock needed
+    oversized = b"x" * (5 * 1024 * 1024 + 1)
+    response = client.post(
+        "/api/timetables/upload",
+        data={"college_id": "college-1"},
+        files={"file": ("timetable.txt", oversized, "text/plain")},
+    )
+
+    assert response.status_code == 400
+    assert "5MB" in response.json()["detail"]
+
+
+# ============================================================
+# dry_run (preview, no DB write)
+# ============================================================
+
+
+def test_upload_dry_run_does_not_write_to_db(monkeypatch):
+    parsed = ParsedTimetable(
+        course="Physics Hons",
+        year=1,
+        section="B",
+        slots=[
+            ParsedSlot(day_of_week=1, start_time="09:00", end_time="10:00", subject="Mechanics"),
+        ],
+    )
+    fake_anthropic = FakeAnthropicClient(FakeAnthropicResponse(parsed_output=parsed))
+    fake_supabase = FakeSupabaseClient(existing_rows={})
+
+    monkeypatch.setattr(timetables, "get_anthropic_client", lambda: fake_anthropic)
+    monkeypatch.setattr(core_config, "get_supabase_client", lambda: fake_supabase)
+
+    response = client.post(
+        "/api/timetables/upload",
+        data={"college_id": "college-1", "text": "Mon 9-10 Mechanics", "dry_run": "true"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "preview"
+    assert body["course"] == "Physics Hons"
+    assert len(body["parsed_slots"]) == 1
+    assert body["source_json_id"]
+    assert "sections_created" not in body
+    assert "slots_inserted" not in body
+
+    # nothing written to the database during a dry run
+    assert fake_supabase.inserted["sections"] == []
+    assert fake_supabase.inserted["timetable_slots"] == []
+
+
+# ============================================================
+# /confirm
+# ============================================================
+
+
+def test_confirm_inserts_previously_parsed_timetable(monkeypatch):
+    fake_supabase = FakeSupabaseClient(existing_rows={})
+    monkeypatch.setattr(core_config, "get_supabase_client", lambda: fake_supabase)
+
+    payload = {
+        "college_id": "college-1",
+        "course": "Physics Hons",
+        "year": 1,
+        "section": "B",
+        "slots": [
+            {"day_of_week": 1, "start_time": "09:00", "end_time": "10:00", "subject": "Mechanics"},
+        ],
+        "source_json_id": "preview-run-123",
+    }
+
+    response = client.post("/api/timetables/confirm", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["sections_created"] == 1
+    assert body["slots_inserted"] == 1
+    assert body["source_json_id"] == "preview-run-123"
+
+    # the same source_json_id shown during preview is what gets stored
+    inserted_slot = fake_supabase.inserted["timetable_slots"][0]
+    assert inserted_slot["source_json_id"] == "preview-run-123"
+    assert inserted_slot["day_of_week"] == 0  # Monday (1) converted to storage convention
+
+
+def test_confirm_rejects_invalid_slot_times(monkeypatch):
+    fake_supabase = FakeSupabaseClient(existing_rows={})
+    monkeypatch.setattr(core_config, "get_supabase_client", lambda: fake_supabase)
+
+    payload = {
+        "college_id": "college-1",
+        "course": "Physics Hons",
+        "year": 1,
+        "section": "B",
+        "slots": [
+            {"day_of_week": 1, "start_time": "10:00", "end_time": "09:00", "subject": "Mechanics"},
+        ],
+    }
+
+    response = client.post("/api/timetables/confirm", json=payload)
+
+    assert response.status_code == 422
+    assert fake_supabase.inserted["timetable_slots"] == []

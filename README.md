@@ -65,22 +65,37 @@ have the Flutter SDK installed:
 cd frontend
 flutter create .   # safely fills in the android/ios/web platform runners
 flutter pub get
-flutter run --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...
+flutter run \
+  --dart-define=SUPABASE_URL=... \
+  --dart-define=SUPABASE_ANON_KEY=... \
+  --dart-define=API_BASE_URL=http://localhost:8000/api
 ```
+
+`API_BASE_URL` points the app at the FastAPI backend above (defaults to
+`http://localhost:8000/api` if omitted).
 
 ## What's implemented vs. stubbed
 
 - `backend/core/scheduler.py` — the event slot suggestion + clash
   detection algorithm is fully implemented, with unit tests in
   `backend/tests/test_scheduler.py`.
-- `POST /api/timetables/upload` — parses an uploaded timetable (image,
-  PDF, or pasted text) via the Claude API, then hands the result to
-  `backend/core/timetable_inserter.py` to write `sections` /
-  `timetable_slots`. Tests in `backend/tests/test_timetables_upload.py`
-  and `backend/tests/test_timetable_inserter.py` (mocked — no real
-  Claude API calls or database).
+- `POST /api/timetables/upload` (`dry_run=true`) parses an uploaded
+  timetable (image, PDF, or pasted text) via the Claude API and returns
+  a preview without writing to the database; `POST
+  /api/timetables/confirm` then inserts the previously-parsed JSON via
+  `backend/core/timetable_inserter.py` — no second Claude call. (Calling
+  `/upload` with `dry_run=false`, the default, parses and inserts in one
+  step.) Tests in `backend/tests/test_timetables_upload.py` and
+  `backend/tests/test_timetable_inserter.py` (mocked — no real Claude
+  API calls or database).
+- `frontend/lib/screens/admin/timetable_upload_screen.dart` — the admin
+  UI for the flow above: fill in details, upload/paste a timetable,
+  review the parsed table, then confirm. Wired in from the Admin tab.
+  **Not compiled/run** — this scaffold was built in an environment
+  without the Flutter SDK, so it's only had a careful manual read-through,
+  not `flutter analyze`/`flutter run`.
 - Everything else (auth, clubs, events, the rest of timetables,
-  attendance, budgets routers; budget total/balance calculations;
+  attendance, budgets routers; budget total/balance calculations; other
   frontend screens) is stubbed — routes return "not implemented", and
   `TODO` comments mark where real logic goes.
 
