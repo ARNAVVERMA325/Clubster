@@ -401,7 +401,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<int>(
-          value: _selectedYear,
+          initialValue: _selectedYear,
           decoration: const InputDecoration(labelText: 'Year'),
           items: const [1, 2, 3]
               .map((y) => DropdownMenuItem(value: y, child: Text('Year $y')))
@@ -422,7 +422,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
           const LinearProgressIndicator()
         else
           DropdownButtonFormField<String>(
-            value: _selectedCollegeId,
+            initialValue: _selectedCollegeId,
             decoration: const InputDecoration(labelText: 'College'),
             items: _colleges
                 .map(

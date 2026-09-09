@@ -67,7 +67,7 @@ flutter create .   # safely fills in the android/ios/web platform runners
 flutter pub get
 flutter run \
   --dart-define=SUPABASE_URL=... \
-  --dart-define=SUPABASE_ANON_KEY=... \
+  --dart-define=SUPABASE_PUBLISHABLE_KEY=... \
   --dart-define=API_BASE_URL=http://localhost:8000/api
 ```
 
