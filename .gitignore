@@ -1,0 +1,55 @@
+# ============================================================
+# Python (backend)
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+dist/
+build/
+
+# ============================================================
+# Dart / Flutter (frontend)
+# ============================================================
+frontend/.dart_tool/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.packages
+frontend/.pub-cache/
+frontend/.pub/
+frontend/build/
+frontend/ephemeral/
+frontend/*.iml
+frontend/android/.gradle/
+frontend/android/gradlew
+frontend/android/gradlew.bat
+frontend/android/local.properties
+frontend/android/**/GeneratedPluginRegistrant.java
+frontend/ios/Flutter/.last_build_id
+frontend/ios/Pods/
+frontend/ios/.symlinks/
+frontend/ios/Flutter/Flutter.framework
+frontend/ios/Flutter/Flutter.podspec
+frontend/web/build/
+frontend/*.g.dart
+frontend/*.freezed.dart
+
+# ============================================================
+# IDE / OS
+# ============================================================
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
