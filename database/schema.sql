@@ -373,3 +373,20 @@ create index idx_event_key_members_event_id on event_key_members (event_id);
 create index idx_event_clashes_event_a_id on event_clashes (event_a_id);
 create index idx_event_clashes_event_b_id on event_clashes (event_b_id);
 create index idx_event_schedule_snapshots_event_id on event_schedule_snapshots (event_id);
+
+-- ============================================================
+-- Grants
+--
+-- Creating a table does NOT by itself let Supabase's public REST API
+-- (PostgREST, used directly by the Flutter app's anon key — e.g. the
+-- college picker in the timetable screens) read it. Without this grant,
+-- every such query fails with "permission denied for table ..." even
+-- though the table exists and the URL/key are correct.
+--
+-- This is a blanket read grant appropriate for scaffolding only. Before
+-- production, replace it with Row Level Security policies scoped to the
+-- signed-in user (e.g. by college_id) rather than a public grant to anon.
+-- ============================================================
+
+grant usage on schema public to anon, authenticated;
+grant select on public.colleges to anon, authenticated;

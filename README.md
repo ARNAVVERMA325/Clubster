@@ -58,6 +58,17 @@ or:
 psql "$DATABASE_URL" -f database/schema.sql
 ```
 
+This includes a grant letting the anon/authenticated roles read
+`colleges` — without it, the app's college picker fails with
+`permission denied for table colleges` even with a correct URL/key,
+since creating a table doesn't by itself expose it to Supabase's public
+API. (It's a blanket grant appropriate for scaffolding only — replace it
+with proper RLS policies before production.)
+
+Then, via the Table Editor, add at least one row to `colleges` — nothing
+in the app creates colleges yet, so skipping this leaves the timetable
+screens' College dropdown empty and unable to proceed.
+
 ### Frontend
 
 The Flutter SDK isn't available in the environment this scaffold was
