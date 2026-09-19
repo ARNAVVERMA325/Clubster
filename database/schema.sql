@@ -390,3 +390,17 @@ create index idx_event_schedule_snapshots_event_id on event_schedule_snapshots (
 
 grant usage on schema public to anon, authenticated;
 grant select on public.colleges to anon, authenticated;
+
+-- If Row Level Security ends up enabled on this table (Supabase's Table
+-- Editor UI defaults it on for tables created there, unlike tables
+-- created via this script) with no policies defined, anon/authenticated
+-- would still see zero rows despite the grant above — RLS silently
+-- filters rows rather than raising an error. Matches the "scaffolding
+-- only" grant above: replace both with real RLS policies before
+-- production instead of leaving this disabled.
+alter table public.colleges disable row level security;
+
+-- Supabase's PostgREST layer can serve a cached (pre-grant) view of
+-- permissions for a short time after running GRANT/RLS statements
+-- manually. This asks it to pick up the change immediately.
+notify pgrst, 'reload schema';

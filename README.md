@@ -62,8 +62,15 @@ This includes a grant letting the anon/authenticated roles read
 `colleges` — without it, the app's college picker fails with
 `permission denied for table colleges` even with a correct URL/key,
 since creating a table doesn't by itself expose it to Supabase's public
-API. (It's a blanket grant appropriate for scaffolding only — replace it
-with proper RLS policies before production.)
+API. It also disables Row Level Security on `colleges` (RLS with no
+policies would otherwise silently hide every row from anon/authenticated
+— no error, just an empty result — even with the grant in place) and
+asks Supabase's API layer to reload permissions immediately. (All of
+this is scaffolding-appropriate only — replace it with proper RLS
+policies before production.) If you already applied an earlier version
+of this file and still see permission errors or an empty college list,
+re-run just the "Grants" section at the bottom of `schema.sql` in the
+SQL editor.
 
 Then, via the Table Editor, add at least one row to `colleges` — nothing
 in the app creates colleges yet, so skipping this leaves the timetable
