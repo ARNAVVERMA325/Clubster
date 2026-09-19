@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'admin/timetable_json_import_screen.dart';
 import 'admin/timetable_manual_entry_screen.dart';
 import 'admin/timetable_upload_screen.dart';
 
@@ -50,6 +51,13 @@ class AdminScreen extends StatelessWidget {
             title: 'Upload Timetable',
             subtitle: 'Parse a section\'s timetable with AI and add it to the system',
             onTap: () => _openScreen(context, const TimetableUploadScreen()),
+          ),
+          const SizedBox(height: 12),
+          _ToolTile(
+            icon: Icons.content_paste_go,
+            title: 'Import Timetable JSON',
+            subtitle: 'Parse with ChatGPT/Gemini/Claude yourself, then import the JSON — free',
+            onTap: () => _openScreen(context, const TimetableJsonImportScreen()),
           ),
           const SizedBox(height: 12),
           _ToolTile(

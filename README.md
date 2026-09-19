@@ -107,18 +107,26 @@ flutter test
 - `frontend/lib/screens/admin/timetable_manual_entry_screen.dart` — a
   free, no-AI alternative: type in day/time/subject rows by hand and post
   straight to `/api/timetables/confirm` (skipping the Claude call
-  entirely). Useful for testing everything else in the app without an
-  Anthropic key, or for admins who'd rather not wait on/pay for parsing.
-  Shares day-grouping, the college picker, and error handling with the
-  upload screen via `frontend/lib/screens/admin/timetable_common.dart`.
-  Both screens are wired in from the Admin tab (`admin_screen.dart`).
-  `flutter analyze` is clean, `flutter build web` compiles, and
-  `frontend/test/widget_test.dart` +
-  `frontend/test/timetable_manual_entry_screen_test.dart` cover
-  rendering, client-side validation, and navigation for both screens
-  (mocking nothing but the network — Supabase is intentionally left
-  uninitialized in tests, which exercises the same error-handling path a
-  real load failure would hit). Still not run interactively in a
+  entirely).
+- `frontend/lib/screens/admin/timetable_json_import_screen.dart` —
+  another free, no-AI-key alternative: shows the exact prompt to paste
+  into an AI chatbot the admin already has access to (ChatGPT, Gemini,
+  Claude.ai, ...) alongside their timetable photo, then imports the JSON
+  it replies with. The AI call happens entirely outside this app (free,
+  in that tool's own chat), so this screen never calls any AI itself —
+  it just validates the JSON client-side (same rules the backend
+  enforces: valid times, `end_time` after `start_time`, etc.) and posts
+  to `/api/timetables/confirm` like the manual-entry screen does.
+  All three timetable screens share day-grouping, the college picker,
+  and error handling via
+  `frontend/lib/screens/admin/timetable_common.dart`, and are wired in
+  from the Admin tab (`admin_screen.dart`). `flutter analyze` is clean,
+  `flutter build web` compiles, and the `frontend/test/*_test.dart` files
+  (22 tests total, including a pure-Dart suite for the JSON validator)
+  cover rendering, client-side validation, and navigation for all three
+  screens (mocking nothing but the network — Supabase is intentionally
+  left uninitialized in tests, which exercises the same error-handling
+  path a real load failure would hit). Still not run interactively in a
   browser/device, so real device rendering, the native file-picker
   dialog, and the actual Claude/Supabase round-trip are unverified.
 - Everything else (auth, clubs, events, the rest of timetables,

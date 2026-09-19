@@ -1,7 +1,7 @@
-// Shared pieces between the AI-powered upload screen and the manual-entry
-// screen — both end up building the same request shape for
-// POST /api/timetables/confirm, and share the college picker / error /
-// day-grouping UI.
+// Shared pieces between the timetable-entry screens (AI upload, manual
+// entry, JSON import) — they all end up building the same request shape
+// for POST /api/timetables/confirm, and share the college picker, error
+// handling, and day-grouped slot display.
 
 import 'dart:convert';
 
@@ -77,6 +77,258 @@ List<MapEntry<int, List<TimetableSlot>>> groupSlotsByDay(List<TimetableSlot> slo
     ..sort((a, b) => weekOrder(a.key).compareTo(weekOrder(b.key)));
   return entries;
 }
+
+/// Renders slots grouped by day (Monday-first) as compact rows. Pass
+/// [trailingBuilder] to add a per-slot action (e.g. a delete button in the
+/// manual-entry screen) — omit it for a read-only preview.
+class DayGroupedSlots extends StatelessWidget {
+  const DayGroupedSlots({
+    super.key,
+    required this.slots,
+    this.trailingBuilder,
+    this.emptyMessage = 'No time slots.',
+  });
+
+  final List<TimetableSlot> slots;
+  final Widget Function(TimetableSlot slot)? trailingBuilder;
+  final String emptyMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final grouped = groupSlotsByDay(slots);
+
+    if (grouped.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: Text(
+            emptyMessage,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: grouped.map((entry) => _dayGroup(context, entry.key, entry.value)).toList(),
+    );
+  }
+
+  Widget _dayGroup(BuildContext context, int dayOfWeek, List<TimetableSlot> daySlots) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+              dayNames[dayOfWeek],
+              style: theme.textTheme.labelLarge
+                  ?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold),
+            ),
+          ),
+          ...daySlots.map(
+            (slot) => Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.schedule, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 108,
+                    child:
+                        Text('${slot.startTime} – ${slot.endTime}', style: theme.textTheme.bodyMedium),
+                  ),
+                  Expanded(
+                    child: Text(
+                      slot.subject ?? 'Unlabeled',
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontStyle: slot.subject == null ? FontStyle.italic : FontStyle.normal,
+                        color: slot.subject == null ? theme.colorScheme.onSurfaceVariant : null,
+                      ),
+                    ),
+                  ),
+                  if (trailingBuilder != null) trailingBuilder!(slot),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+final RegExp _timePattern = RegExp(r'^([01]\d|2[0-3]):[0-5]\d$');
+
+class ImportedTimetable {
+  final String course;
+  final int year;
+  final String section;
+  final List<TimetableSlot> slots;
+
+  ImportedTimetable({
+    required this.course,
+    required this.year,
+    required this.section,
+    required this.slots,
+  });
+}
+
+/// Thrown by [parseTimetableJson] with a specific, user-facing message
+/// naming exactly what's wrong with the JSON.
+class TimetableJsonFormatException implements Exception {
+  TimetableJsonFormatException(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// Validates and parses timetable JSON produced by an external AI chatbot
+/// (ChatGPT, Gemini, Claude, ...) using [externalAiPrompt] — the same
+/// shape and day-of-week convention (0=Sunday..6=Saturday) as the
+/// backend's own Claude-powered parser
+/// (routers/timetables.py's CUSTOM_TIMETABLE_PROMPT). Throws
+/// [TimetableJsonFormatException] on the first problem found.
+ImportedTimetable parseTimetableJson(String raw) {
+  Object? decoded;
+  try {
+    decoded = jsonDecode(raw);
+  } on FormatException {
+    throw TimetableJsonFormatException("That's not valid JSON.");
+  }
+
+  if (decoded is! Map<String, dynamic>) {
+    throw TimetableJsonFormatException(
+      'Expected a JSON object with course/year/section/slots.',
+    );
+  }
+
+  final course = decoded['course'];
+  if (course is! String || course.trim().isEmpty) {
+    throw TimetableJsonFormatException('"course" must be a non-empty string.');
+  }
+
+  final year = decoded['year'];
+  if (year is! int) {
+    throw TimetableJsonFormatException('"year" must be a whole number.');
+  }
+
+  final section = decoded['section'];
+  if (section is! String || section.trim().isEmpty) {
+    throw TimetableJsonFormatException('"section" must be a non-empty string.');
+  }
+
+  final rawSlots = decoded['slots'];
+  if (rawSlots is! List) {
+    throw TimetableJsonFormatException('"slots" must be a list.');
+  }
+
+  final slots = <TimetableSlot>[];
+  for (var i = 0; i < rawSlots.length; i++) {
+    final entry = rawSlots[i];
+    if (entry is! Map<String, dynamic>) {
+      throw TimetableJsonFormatException('slots[$i] must be a JSON object.');
+    }
+
+    final dayOfWeek = entry['day_of_week'];
+    if (dayOfWeek is! int || dayOfWeek < 0 || dayOfWeek > 6) {
+      throw TimetableJsonFormatException(
+        'slots[$i].day_of_week must be a number 0-6 (0=Sunday).',
+      );
+    }
+
+    final startTime = entry['start_time'];
+    if (startTime is! String || !_timePattern.hasMatch(startTime)) {
+      throw TimetableJsonFormatException(
+        'slots[$i].start_time must be a 24-hour time like "09:00".',
+      );
+    }
+
+    final endTime = entry['end_time'];
+    if (endTime is! String || !_timePattern.hasMatch(endTime)) {
+      throw TimetableJsonFormatException(
+        'slots[$i].end_time must be a 24-hour time like "10:00".',
+      );
+    }
+
+    if (endTime.compareTo(startTime) <= 0) {
+      throw TimetableJsonFormatException('slots[$i].end_time must be after start_time.');
+    }
+
+    final subject = entry['subject'];
+    if (subject != null && subject is! String) {
+      throw TimetableJsonFormatException('slots[$i].subject must be a string or null.');
+    }
+
+    slots.add(TimetableSlot(
+      dayOfWeek: dayOfWeek,
+      startTime: startTime,
+      endTime: endTime,
+      subject: subject as String?,
+    ));
+  }
+
+  return ImportedTimetable(
+    course: course.trim(),
+    year: year,
+    section: section.trim(),
+    slots: slots,
+  );
+}
+
+/// The exact prompt to paste into an external AI chatbot (ChatGPT, Gemini,
+/// Claude, ...) alongside a timetable photo — identical to the backend's
+/// own CUSTOM_TIMETABLE_PROMPT (routers/timetables.py) so the JSON it
+/// returns is guaranteed compatible with [parseTimetableJson] and
+/// POST /api/timetables/confirm.
+const String externalAiPrompt = '''
+You are a timetable parser for Delhi University colleges. Your job is to
+extract class schedules from messy, handwritten, or formatted timetables
+and return structured JSON.
+
+Input: A timetable for one section (e.g., "Physics Hons, Section B, Year 1")
+
+Output: A JSON object with this exact structure:
+{
+  "course": "Physics Hons",
+  "year": 1,
+  "section": "B",
+  "slots": [
+    {
+      "day_of_week": 1,
+      "start_time": "09:00",
+      "end_time": "10:00",
+      "subject": "Mechanics" or null if unlabeled
+    },
+    ...
+  ]
+}
+
+Rules:
+- day_of_week: 0=Sunday, 1=Monday, ..., 6=Saturday
+- Times in 24-hour format (HH:MM)
+- Ignore lunch breaks, assembly, holidays
+- If a time slot is empty/free, do NOT include it
+- If subject is unclear, use null
+- Return ONLY valid JSON, no other text
+
+Example input: "Mon 9-10 Mechanics, Tue 9-11 Practicals Lab, Wed 2-3 Tutorial"
+Example output: {"course": "Physics Hons", "year": 1, "section": "B",
+"slots": [{"day_of_week": 1, "start_time": "09:00", "end_time": "10:00",
+"subject": "Mechanics"}, ...]}''';
 
 /// Extracts a human-readable message from a non-200 backend response,
 /// handling all the `detail` shapes the API can send: a plain string, the

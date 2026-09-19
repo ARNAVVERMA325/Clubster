@@ -262,9 +262,6 @@ class _TimetableManualEntryScreenState extends State<TimetableManualEntryScreen>
   }
 
   Widget _buildSlotsSection() {
-    final theme = Theme.of(context);
-    final grouped = groupSlotsByDay(_slots);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -317,77 +314,18 @@ class _TimetableManualEntryScreenState extends State<TimetableManualEntryScreen>
           label: const Text('Add Slot'),
         ),
         const SizedBox(height: 16),
-        if (grouped.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Center(
-              child: Text(
-                'No slots added yet.',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-              ),
-            ),
-          )
-        else
-          ...grouped.map((entry) => _buildDayGroup(entry.key, entry.value)),
+        DayGroupedSlots(
+          slots: _slots,
+          emptyMessage: 'No slots added yet.',
+          trailingBuilder: (slot) => IconButton(
+            tooltip: 'Remove slot',
+            iconSize: 18,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close),
+            onPressed: () => _removeSlot(slot),
+          ),
+        ),
       ],
-    );
-  }
-
-  Widget _buildDayGroup(int dayOfWeek, List<TimetableSlot> slots) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Text(
-              dayNames[dayOfWeek],
-              style: theme.textTheme.labelLarge
-                  ?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold),
-            ),
-          ),
-          ...slots.map(
-            (slot) => Container(
-              margin: const EdgeInsets.only(bottom: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.schedule, size: 16, color: theme.colorScheme.onSurfaceVariant),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 108,
-                    child: Text('${slot.startTime} – ${slot.endTime}', style: theme.textTheme.bodyMedium),
-                  ),
-                  Expanded(
-                    child: Text(
-                      slot.subject ?? 'Unlabeled',
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontStyle: slot.subject == null ? FontStyle.italic : FontStyle.normal,
-                        color: slot.subject == null ? theme.colorScheme.onSurfaceVariant : null,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Remove slot',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.close),
-                    onPressed: () => _removeSlot(slot),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 

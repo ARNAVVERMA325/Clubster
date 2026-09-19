@@ -530,7 +530,6 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
 
   Widget _buildPreview() {
     final preview = _preview!;
-    final grouped = groupSlotsByDay(preview.slots);
     final theme = Theme.of(context);
 
     return Column(
@@ -566,21 +565,11 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        if (grouped.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Center(
-              child: Text(
-                'No time slots were found. Try a clearer photo, or paste the\n'
-                'timetable as text instead.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-              ),
-            ),
-          )
-        else
-          ...grouped.map((entry) => _buildDayGroup(entry.key, entry.value)),
+        DayGroupedSlots(
+          slots: preview.slots,
+          emptyMessage: 'No time slots were found. Try a clearer photo, or paste the '
+              'timetable as text instead.',
+        ),
         const SizedBox(height: 12),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -638,60 +627,6 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
     );
   }
 
-  Widget _buildDayGroup(int dayOfWeek, List<TimetableSlot> slots) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Text(
-              dayNames[dayOfWeek],
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          ...slots.map(
-            (slot) => Container(
-              margin: const EdgeInsets.only(bottom: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.schedule, size: 16, color: theme.colorScheme.onSurfaceVariant),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 108,
-                    child: Text(
-                      '${slot.startTime} – ${slot.endTime}',
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      slot.subject ?? 'Unlabeled',
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontStyle: slot.subject == null ? FontStyle.italic : FontStyle.normal,
-                        color: slot.subject == null ? theme.colorScheme.onSurfaceVariant : null,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 /// A lightweight dashed-border drop-zone look for the file picker tap
