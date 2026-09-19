@@ -6,96 +6,138 @@
 --   supabase db push
 -- or
 --   psql "$DATABASE_URL" -f database/schema.sql
+--
+-- Safe to re-run: every statement below is idempotent (create ... if not
+-- exists, or a do-block swallowing "already exists" for enum types,
+-- which Postgres has no IF NOT EXISTS clause for). Re-running this file
+-- against a database that already has some or all of it applied should
+-- never error.
 -- ============================================================
 
 create extension if not exists "pgcrypto";
 
 -- ============================================================
 -- Enums
+--
+-- Postgres has no `create type ... if not exists`, so each is wrapped in
+-- a do-block that swallows the "already exists" error.
 -- ============================================================
 
-create type membership_role as enum (
-  'president',
-  'vice_president',
-  'secretary',
-  'treasurer',
-  'event_coordinator',
-  'member'
-);
+do $$ begin
+  create type membership_role as enum (
+    'president',
+    'vice_president',
+    'secretary',
+    'treasurer',
+    'event_coordinator',
+    'member'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type event_type as enum (
-  'meeting',
-  'workshop',
-  'fest',
-  'trip',
-  'planning',
-  'other'
-);
+do $$ begin
+  create type event_type as enum (
+    'meeting',
+    'workshop',
+    'fest',
+    'trip',
+    'planning',
+    'other'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type event_visibility as enum (
-  'club_only',
-  'college_open',
-  'all_colleges_open'
-);
+do $$ begin
+  create type event_visibility as enum (
+    'club_only',
+    'college_open',
+    'all_colleges_open'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type attendance_method as enum (
-  'qr',
-  'roll_number_entry'
-);
+do $$ begin
+  create type attendance_method as enum (
+    'qr',
+    'roll_number_entry'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type budget_entry_type as enum (
-  'income',
-  'expense'
-);
+do $$ begin
+  create type budget_entry_type as enum (
+    'income',
+    'expense'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type notification_type as enum (
-  'reminder',
-  'event_created',
-  'clash_warning',
-  'general'
-);
+do $$ begin
+  create type notification_type as enum (
+    'reminder',
+    'event_created',
+    'clash_warning',
+    'general'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type override_type as enum (
-  'add',
-  'remove'
-);
+do $$ begin
+  create type override_type as enum (
+    'add',
+    'remove'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type rsvp_status as enum (
-  'going',
-  'maybe',
-  'not_going'
-);
+do $$ begin
+  create type rsvp_status as enum (
+    'going',
+    'maybe',
+    'not_going'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type calendar_day_type as enum (
-  'holiday',
-  'exam',
-  'fest',
-  'normal'
-);
+do $$ begin
+  create type calendar_day_type as enum (
+    'holiday',
+    'exam',
+    'fest',
+    'normal'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type clash_type as enum (
-  'venue',
-  'audience'
-);
+do $$ begin
+  create type clash_type as enum (
+    'venue',
+    'audience'
+  );
+exception when duplicate_object then null;
+end $$;
 
-create type clash_status as enum (
-  'open',
-  'acknowledged',
-  'resolved'
-);
+do $$ begin
+  create type clash_status as enum (
+    'open',
+    'acknowledged',
+    'resolved'
+  );
+exception when duplicate_object then null;
+end $$;
 
 -- ============================================================
 -- Core identity / org structure
 -- ============================================================
 
-create table colleges (
+create table if not exists colleges (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   domain text unique,
   created_at timestamptz not null default now()
 );
 
-create table sections (
+create table if not exists sections (
   id uuid primary key default gen_random_uuid(),
   college_id uuid not null references colleges(id) on delete cascade,
   course text,
@@ -105,7 +147,7 @@ create table sections (
 );
 
 -- id is expected to match auth.users.id when created via Supabase Auth.
-create table users (
+create table if not exists users (
   id uuid primary key default gen_random_uuid(),
   college_id uuid not null references colleges(id) on delete cascade,
   section_id uuid references sections(id) on delete set null,
@@ -116,7 +158,7 @@ create table users (
   created_at timestamptz not null default now()
 );
 
-create table clubs (
+create table if not exists clubs (
   id uuid primary key default gen_random_uuid(),
   college_id uuid not null references colleges(id) on delete cascade,
   name text not null,
@@ -125,7 +167,7 @@ create table clubs (
   created_at timestamptz not null default now()
 );
 
-create table club_memberships (
+create table if not exists club_memberships (
   id uuid primary key default gen_random_uuid(),
   club_id uuid not null references clubs(id) on delete cascade,
   user_id uuid not null references users(id) on delete cascade,
@@ -138,7 +180,7 @@ create table club_memberships (
 -- Timetables / venues
 -- ============================================================
 
-create table timetable_slots (
+create table if not exists timetable_slots (
   id uuid primary key default gen_random_uuid(),
   section_id uuid not null references sections(id) on delete cascade,
   day_of_week int not null check (day_of_week between 0 and 6),
@@ -155,7 +197,7 @@ create table timetable_slots (
   check (end_time > start_time)
 );
 
-create table venues (
+create table if not exists venues (
   id uuid primary key default gen_random_uuid(),
   college_id uuid not null references colleges(id) on delete cascade,
   name text not null,
@@ -168,7 +210,7 @@ create table venues (
 -- Events
 -- ============================================================
 
-create table events (
+create table if not exists events (
   id uuid primary key default gen_random_uuid(),
   club_id uuid not null references clubs(id) on delete cascade,
   college_id uuid not null references colleges(id) on delete cascade,
@@ -190,7 +232,7 @@ create table events (
   updated_at timestamptz not null default now()
 );
 
-create table event_target_sections (
+create table if not exists event_target_sections (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references events(id) on delete cascade,
   section_id uuid not null references sections(id) on delete cascade,
@@ -198,7 +240,7 @@ create table event_target_sections (
   unique (event_id, section_id)
 );
 
-create table event_attendance (
+create table if not exists event_attendance (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references events(id) on delete cascade,
   user_id uuid not null references users(id) on delete cascade,
@@ -212,7 +254,7 @@ create table event_attendance (
 -- Sponsors / budgets
 -- ============================================================
 
-create table sponsors (
+create table if not exists sponsors (
   id uuid primary key default gen_random_uuid(),
   college_id uuid not null references colleges(id) on delete cascade,
   club_id uuid references clubs(id) on delete set null,
@@ -223,7 +265,7 @@ create table sponsors (
   created_at timestamptz not null default now()
 );
 
-create table budgets (
+create table if not exists budgets (
   id uuid primary key default gen_random_uuid(),
   club_id uuid not null references clubs(id) on delete cascade,
   event_id uuid references events(id) on delete set null,
@@ -232,7 +274,7 @@ create table budgets (
   created_at timestamptz not null default now()
 );
 
-create table budget_entries (
+create table if not exists budget_entries (
   id uuid primary key default gen_random_uuid(),
   budget_id uuid not null references budgets(id) on delete cascade,
   type budget_entry_type not null,
@@ -247,7 +289,7 @@ create table budget_entries (
 -- Notifications
 -- ============================================================
 
-create table notifications (
+create table if not exists notifications (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references users(id) on delete cascade,
   type notification_type not null default 'general',
@@ -265,7 +307,7 @@ create table notifications (
 -- Per-user, per-weekday additions/removals layered on top of the
 -- section's base timetable_slots (e.g. an elective that isn't shared by
 -- the whole section).
-create table user_timetable_overrides (
+create table if not exists user_timetable_overrides (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references users(id) on delete cascade,
   day_of_week int not null check (day_of_week between 0 and 6),
@@ -276,7 +318,7 @@ create table user_timetable_overrides (
   check (end_time > start_time)
 );
 
-create table event_rsvps (
+create table if not exists event_rsvps (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references events(id) on delete cascade,
   user_id uuid not null references users(id) on delete cascade,
@@ -287,7 +329,7 @@ create table event_rsvps (
 );
 
 -- One row per college; tunable parameters for the scheduling algorithm.
-create table college_settings (
+create table if not exists college_settings (
   id uuid primary key default gen_random_uuid(),
   college_id uuid not null unique references colleges(id) on delete cascade,
   day_start time not null default '09:00',
@@ -300,7 +342,7 @@ create table college_settings (
   created_at timestamptz not null default now()
 );
 
-create table academic_calendar (
+create table if not exists academic_calendar (
   id uuid primary key default gen_random_uuid(),
   college_id uuid not null references colleges(id) on delete cascade,
   date date not null,
@@ -310,7 +352,7 @@ create table academic_calendar (
   unique (college_id, date)
 );
 
-create table event_key_members (
+create table if not exists event_key_members (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references events(id) on delete cascade,
   user_id uuid not null references users(id) on delete cascade,
@@ -319,7 +361,7 @@ create table event_key_members (
   unique (event_id, user_id)
 );
 
-create table event_clashes (
+create table if not exists event_clashes (
   id uuid primary key default gen_random_uuid(),
   event_a_id uuid not null references events(id) on delete cascade,
   event_b_id uuid not null references events(id) on delete cascade,
@@ -331,7 +373,7 @@ create table event_clashes (
   check (event_a_id <> event_b_id)
 );
 
-create table event_schedule_snapshots (
+create table if not exists event_schedule_snapshots (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references events(id) on delete cascade,
   computed_at timestamptz not null default now(),
@@ -345,34 +387,34 @@ create table event_schedule_snapshots (
 -- Indexes
 -- ============================================================
 
-create index idx_users_college_id on users (college_id);
-create index idx_users_section_id on users (section_id);
-create index idx_club_memberships_user_id on club_memberships (user_id);
-create index idx_club_memberships_club_id on club_memberships (club_id);
-create index idx_sections_college_id on sections (college_id);
-create unique index idx_sections_college_course_section_name_year
+create index if not exists idx_users_college_id on users (college_id);
+create index if not exists idx_users_section_id on users (section_id);
+create index if not exists idx_club_memberships_user_id on club_memberships (user_id);
+create index if not exists idx_club_memberships_club_id on club_memberships (club_id);
+create index if not exists idx_sections_college_id on sections (college_id);
+create unique index if not exists idx_sections_college_course_section_name_year
   on sections (college_id, course, section_name, year);
-create index idx_timetable_slots_section_id on timetable_slots (section_id);
-create index idx_timetable_slots_uploaded_by on timetable_slots (uploaded_by);
-create index idx_timetable_slots_source_json_id on timetable_slots (source_json_id);
-create index idx_venues_college_id on venues (college_id);
-create index idx_events_club_id on events (club_id);
-create index idx_events_college_id on events (college_id);
-create index idx_events_venue_id on events (venue_id);
-create index idx_event_target_sections_event_id on event_target_sections (event_id);
-create index idx_event_target_sections_section_id on event_target_sections (section_id);
-create index idx_event_attendance_event_id on event_attendance (event_id);
-create index idx_budgets_club_id on budgets (club_id);
-create index idx_budget_entries_budget_id on budget_entries (budget_id);
-create index idx_notifications_user_id on notifications (user_id);
-create index idx_user_timetable_overrides_user_id on user_timetable_overrides (user_id);
-create index idx_event_rsvps_event_id on event_rsvps (event_id);
-create index idx_event_rsvps_user_id on event_rsvps (user_id);
-create index idx_academic_calendar_college_date on academic_calendar (college_id, date);
-create index idx_event_key_members_event_id on event_key_members (event_id);
-create index idx_event_clashes_event_a_id on event_clashes (event_a_id);
-create index idx_event_clashes_event_b_id on event_clashes (event_b_id);
-create index idx_event_schedule_snapshots_event_id on event_schedule_snapshots (event_id);
+create index if not exists idx_timetable_slots_section_id on timetable_slots (section_id);
+create index if not exists idx_timetable_slots_uploaded_by on timetable_slots (uploaded_by);
+create index if not exists idx_timetable_slots_source_json_id on timetable_slots (source_json_id);
+create index if not exists idx_venues_college_id on venues (college_id);
+create index if not exists idx_events_club_id on events (club_id);
+create index if not exists idx_events_college_id on events (college_id);
+create index if not exists idx_events_venue_id on events (venue_id);
+create index if not exists idx_event_target_sections_event_id on event_target_sections (event_id);
+create index if not exists idx_event_target_sections_section_id on event_target_sections (section_id);
+create index if not exists idx_event_attendance_event_id on event_attendance (event_id);
+create index if not exists idx_budgets_club_id on budgets (club_id);
+create index if not exists idx_budget_entries_budget_id on budget_entries (budget_id);
+create index if not exists idx_notifications_user_id on notifications (user_id);
+create index if not exists idx_user_timetable_overrides_user_id on user_timetable_overrides (user_id);
+create index if not exists idx_event_rsvps_event_id on event_rsvps (event_id);
+create index if not exists idx_event_rsvps_user_id on event_rsvps (user_id);
+create index if not exists idx_academic_calendar_college_date on academic_calendar (college_id, date);
+create index if not exists idx_event_key_members_event_id on event_key_members (event_id);
+create index if not exists idx_event_clashes_event_a_id on event_clashes (event_a_id);
+create index if not exists idx_event_clashes_event_b_id on event_clashes (event_b_id);
+create index if not exists idx_event_schedule_snapshots_event_id on event_schedule_snapshots (event_id);
 
 -- ============================================================
 -- Grants
@@ -386,6 +428,7 @@ create index idx_event_schedule_snapshots_event_id on event_schedule_snapshots (
 -- This is a blanket read grant appropriate for scaffolding only. Before
 -- production, replace it with Row Level Security policies scoped to the
 -- signed-in user (e.g. by college_id) rather than a public grant to anon.
+-- (GRANT is already idempotent — re-running it is a no-op, not an error.)
 -- ============================================================
 
 grant usage on schema public to anon, authenticated;
