@@ -8,63 +8,17 @@ import 'package:http_parser/http_parser.dart';
 
 import '../../core/api_config.dart';
 import '../../core/supabase_config.dart';
+import 'timetable_common.dart';
 
 const int _maxFileBytes = 5 * 1024 * 1024;
 
-// Matches the backend's parser convention (routers/timetables.py):
-// 0=Sunday .. 6=Saturday. This is NOT the same convention timetable_slots
-// stores internally (0=Monday) — that conversion happens server-side.
-const List<String> _dayNames = [
-  'Sunday',
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-];
-
-/// Where a day falls in a Monday-first week, for display order only
-/// (0=Monday..6=Sunday) — the API's own 0=Sunday convention is untouched.
-int _weekOrder(int dayOfWeekSundayZero) => (dayOfWeekSundayZero + 6) % 7;
-
 enum _InputMode { file, text }
-
-class ParsedSlotPreview {
-  final int dayOfWeek;
-  final String startTime;
-  final String endTime;
-  final String? subject;
-
-  ParsedSlotPreview({
-    required this.dayOfWeek,
-    required this.startTime,
-    required this.endTime,
-    this.subject,
-  });
-
-  factory ParsedSlotPreview.fromJson(Map<String, dynamic> json) {
-    return ParsedSlotPreview(
-      dayOfWeek: json['day_of_week'] as int,
-      startTime: json['start_time'] as String,
-      endTime: json['end_time'] as String,
-      subject: json['subject'] as String?,
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-        'day_of_week': dayOfWeek,
-        'start_time': startTime,
-        'end_time': endTime,
-        'subject': subject,
-      };
-}
 
 class TimetablePreview {
   final String course;
   final int year;
   final String section;
-  final List<ParsedSlotPreview> slots;
+  final List<TimetableSlot> slots;
   final String sourceJsonId;
 
   TimetablePreview({
@@ -81,25 +35,10 @@ class TimetablePreview {
       year: json['year'] as int,
       section: json['section'] as String,
       slots: (json['parsed_slots'] as List)
-          .map((e) => ParsedSlotPreview.fromJson(e as Map<String, dynamic>))
+          .map((e) => TimetableSlot.fromJson(e as Map<String, dynamic>))
           .toList(),
       sourceJsonId: json['source_json_id'] as String,
     );
-  }
-
-  /// Slots grouped by day and sorted for display: Monday-first week order,
-  /// then by start time within each day.
-  List<MapEntry<int, List<ParsedSlotPreview>>> get groupedByDay {
-    final byDay = <int, List<ParsedSlotPreview>>{};
-    for (final slot in slots) {
-      byDay.putIfAbsent(slot.dayOfWeek, () => []).add(slot);
-    }
-    for (final daySlots in byDay.values) {
-      daySlots.sort((a, b) => a.startTime.compareTo(b.startTime));
-    }
-    final entries = byDay.entries.toList()
-      ..sort((a, b) => _weekOrder(a.key).compareTo(_weekOrder(b.key)));
-    return entries;
   }
 }
 
@@ -113,6 +52,10 @@ class TimetablePreview {
 /// year, and section by having Claude read the uploaded content itself
 /// (see POST /api/timetables/upload), so what's saved is whatever it
 /// parsed, not what's typed here.
+///
+/// This calls the Claude API and costs a small amount per upload — see
+/// TimetableManualEntryScreen for a free, no-AI alternative that writes
+/// to the same tables via the same POST /api/timetables/confirm.
 class TimetableUploadScreen extends StatefulWidget {
   const TimetableUploadScreen({super.key});
 
@@ -127,9 +70,6 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
 
   int? _selectedYear;
   String? _selectedCollegeId;
-  List<Map<String, dynamic>> _colleges = [];
-  bool _loadingColleges = true;
-  String? _collegesError;
 
   _InputMode _inputMode = _InputMode.file;
   PlatformFile? _pickedFile;
@@ -140,42 +80,11 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
   TimetablePreview? _preview;
 
   @override
-  void initState() {
-    super.initState();
-    _loadColleges();
-  }
-
-  @override
   void dispose() {
     _courseController.dispose();
     _sectionController.dispose();
     _textController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadColleges() async {
-    setState(() {
-      _loadingColleges = true;
-      _collegesError = null;
-    });
-    try {
-      final rows =
-          await supabase.from('colleges').select('id, name').order('name', ascending: true);
-      if (!mounted) return;
-      setState(() {
-        _colleges = List<Map<String, dynamic>>.from(rows);
-        _loadingColleges = false;
-        // TODO: default this to the logged-in admin's own college once a
-        // user-profile fetch (users -> college_id) exists, instead of
-        // leaving it for them to pick every time.
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loadingColleges = false;
-        _collegesError = 'Could not load colleges: $e';
-      });
-    }
   }
 
   Future<void> _pickFile() async {
@@ -236,37 +145,6 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
     return null;
   }
 
-  String _extractErrorMessage(http.Response response) {
-    try {
-      final decoded = jsonDecode(response.body);
-      if (decoded is Map<String, dynamic>) {
-        final detail = decoded['detail'];
-        if (detail is String) return detail;
-        if (detail is Map) {
-          final error = detail['error'];
-          final reason = detail['reason'];
-          if (error != null) {
-            return reason != null ? '$error: $reason' : '$error';
-          }
-        }
-        if (detail is List && detail.isNotEmpty) {
-          // FastAPI's default request-validation shape:
-          // {"detail": [{"loc": [...], "msg": "...", ...}, ...]}
-          final messages = detail
-              .map((e) => e is Map ? e['msg']?.toString() : e.toString())
-              .whereType<String>()
-              .toList();
-          if (messages.isNotEmpty) return messages.join('; ');
-        }
-      }
-    } catch (_) {
-      // not JSON — fall through to the raw body below
-    }
-    return response.body.isNotEmpty
-        ? response.body
-        : 'Request failed (${response.statusCode})';
-  }
-
   Future<void> _parseTimetable() async {
     final validationError = _validate();
     if (validationError != null) {
@@ -317,7 +195,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         setState(() => _preview = TimetablePreview.fromJson(json));
       } else {
-        setState(() => _errorMessage = _extractErrorMessage(response));
+        setState(() => _errorMessage = extractHttpErrorMessage(response));
       }
     } catch (e) {
       if (!mounted) return;
@@ -365,7 +243,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
           '${json['slots_inserted']} slot(s) inserted.',
         );
       } else {
-        setState(() => _errorMessage = 'Save failed: ${_extractErrorMessage(response)}');
+        setState(() => _errorMessage = 'Save failed: ${extractHttpErrorMessage(response)}');
       }
     } catch (e) {
       if (!mounted) return;
@@ -396,10 +274,13 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       if (_errorMessage != null) ...[
-                        _buildErrorBanner(),
+                        ErrorBanner(
+                          message: _errorMessage!,
+                          onDismiss: () => setState(() => _errorMessage = null),
+                        ),
                         const SizedBox(height: 16),
                       ],
-                      _sectionCard(
+                      SectionCard(
                         step: 1,
                         title: 'Timetable details',
                         subtitle: 'For your reference — the AI reads these from the upload itself.',
@@ -407,7 +288,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
                       ),
                       const SizedBox(height: 16),
                       if (_preview == null) ...[
-                        _sectionCard(
+                        SectionCard(
                           step: 2,
                           title: 'Timetable source',
                           subtitle: 'Upload a file or paste the timetable as text.',
@@ -415,11 +296,10 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
                         ),
                         const SizedBox(height: 20),
                         _buildParseButton(),
-                      ] else ...[
-                        _sectionCard(
+                      ] else
+                        SectionCard(
                           step: 2,
                           title: 'Review parsed timetable',
-                          subtitle: null,
                           trailing: TextButton.icon(
                             onPressed: _isSaving ? null : _editAgain,
                             icon: const Icon(Icons.edit_outlined, size: 18),
@@ -427,103 +307,12 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
                           ),
                           child: _buildPreview(),
                         ),
-                      ],
                     ],
                   ),
                 ),
               ),
             );
           },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildErrorBanner() {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: scheme.errorContainer,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.error_outline, color: scheme.onErrorContainer, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              _errorMessage!,
-              style: TextStyle(color: scheme.onErrorContainer),
-            ),
-          ),
-          InkWell(
-            onTap: () => setState(() => _errorMessage = null),
-            borderRadius: BorderRadius.circular(16),
-            child: Icon(Icons.close, color: scheme.onErrorContainer, size: 18),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// A numbered section card — gives the form a step-by-step feel without a
-  /// full wizard/stepper widget.
-  Widget _sectionCard({
-    required int step,
-    required String title,
-    String? subtitle,
-    Widget? trailing,
-    required Widget child,
-  }) {
-    final theme = Theme.of(context);
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: theme.colorScheme.outlineVariant),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 13,
-                  backgroundColor: theme.colorScheme.primaryContainer,
-                  child: Text(
-                    '$step',
-                    style: TextStyle(
-                      color: theme.colorScheme.onPrimaryContainer,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(title, style: theme.textTheme.titleMedium),
-                ),
-                if (trailing != null) trailing,
-              ],
-            ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 4),
-              Padding(
-                padding: const EdgeInsets.only(left: 38),
-                child: Text(
-                  subtitle,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-            child,
-          ],
         ),
       ),
     );
@@ -577,69 +366,12 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
           ],
         ),
         const SizedBox(height: 14),
-        _buildCollegeField(locked),
+        CollegeDropdownField(
+          enabled: !locked,
+          initialValue: _selectedCollegeId,
+          onChanged: (v) => setState(() => _selectedCollegeId = v),
+        ),
       ],
-    );
-  }
-
-  Widget _buildCollegeField(bool locked) {
-    if (_loadingColleges) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 12),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            SizedBox(width: 12),
-            Text('Loading colleges...'),
-          ],
-        ),
-      );
-    }
-
-    if (_collegesError != null) {
-      return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                _collegesError!,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-            TextButton(onPressed: _loadColleges, child: const Text('Retry')),
-          ],
-        ),
-      );
-    }
-
-    return DropdownButtonFormField<String>(
-      initialValue: _selectedCollegeId,
-      decoration: const InputDecoration(
-        labelText: 'College',
-        prefixIcon: Icon(Icons.location_city_outlined),
-      ),
-      isExpanded: true,
-      items: _colleges
-          .map(
-            (c) => DropdownMenuItem<String>(
-              value: c['id'] as String,
-              child: Text(
-                (c['name'] as String?) ?? c['id'] as String,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          )
-          .toList(),
-      onChanged: locked ? null : (v) => setState(() => _selectedCollegeId = v),
     );
   }
 
@@ -798,7 +530,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
 
   Widget _buildPreview() {
     final preview = _preview!;
-    final grouped = preview.groupedByDay;
+    final grouped = groupSlotsByDay(preview.slots);
     final theme = Theme.of(context);
 
     return Column(
@@ -906,7 +638,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
     );
   }
 
-  Widget _buildDayGroup(int dayOfWeek, List<ParsedSlotPreview> slots) {
+  Widget _buildDayGroup(int dayOfWeek, List<TimetableSlot> slots) {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -916,7 +648,7 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: Text(
-              _dayNames[dayOfWeek],
+              dayNames[dayOfWeek],
               style: theme.textTheme.labelLarge?.copyWith(
                 color: theme.colorScheme.primary,
                 fontWeight: FontWeight.bold,

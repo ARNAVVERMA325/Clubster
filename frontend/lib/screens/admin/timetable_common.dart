@@ -1,0 +1,332 @@
+// Shared pieces between the AI-powered upload screen and the manual-entry
+// screen — both end up building the same request shape for
+// POST /api/timetables/confirm, and share the college picker / error /
+// day-grouping UI.
+
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+import '../../core/supabase_config.dart';
+
+/// Matches the backend's day-of-week convention (routers/timetables.py):
+/// 0=Sunday .. 6=Saturday. This is NOT the same convention timetable_slots
+/// stores internally (0=Monday) — that conversion happens server-side in
+/// core/timetable_inserter.py.
+const List<String> dayNames = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+
+/// Where a day falls in a Monday-first week, for display order only
+/// (0=Monday..6=Sunday) — the API's own 0=Sunday convention is untouched.
+int weekOrder(int dayOfWeekSundayZero) => (dayOfWeekSundayZero + 6) % 7;
+
+/// Inverse of [weekOrder]: given a Monday-first display position
+/// (0=Monday..6=Sunday), returns the day-of-week value the API expects
+/// (0=Sunday..6=Saturday).
+int dayOfWeekFromWeekOrder(int order) => (order + 1) % 7;
+
+class TimetableSlot {
+  final int dayOfWeek;
+  final String startTime;
+  final String endTime;
+  final String? subject;
+
+  TimetableSlot({
+    required this.dayOfWeek,
+    required this.startTime,
+    required this.endTime,
+    this.subject,
+  });
+
+  factory TimetableSlot.fromJson(Map<String, dynamic> json) {
+    return TimetableSlot(
+      dayOfWeek: json['day_of_week'] as int,
+      startTime: json['start_time'] as String,
+      endTime: json['end_time'] as String,
+      subject: json['subject'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'day_of_week': dayOfWeek,
+        'start_time': startTime,
+        'end_time': endTime,
+        'subject': subject,
+      };
+}
+
+/// Groups slots by day, sorted Monday-first, each day's slots sorted by
+/// start time.
+List<MapEntry<int, List<TimetableSlot>>> groupSlotsByDay(List<TimetableSlot> slots) {
+  final byDay = <int, List<TimetableSlot>>{};
+  for (final slot in slots) {
+    byDay.putIfAbsent(slot.dayOfWeek, () => []).add(slot);
+  }
+  for (final daySlots in byDay.values) {
+    daySlots.sort((a, b) => a.startTime.compareTo(b.startTime));
+  }
+  final entries = byDay.entries.toList()
+    ..sort((a, b) => weekOrder(a.key).compareTo(weekOrder(b.key)));
+  return entries;
+}
+
+/// Extracts a human-readable message from a non-200 backend response,
+/// handling all the `detail` shapes the API can send: a plain string, the
+/// `{"error", "reason"}` validation shape, or FastAPI's default
+/// request-validation list shape.
+String extractHttpErrorMessage(http.Response response) {
+  try {
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map<String, dynamic>) {
+      final detail = decoded['detail'];
+      if (detail is String) return detail;
+      if (detail is Map) {
+        final error = detail['error'];
+        final reason = detail['reason'];
+        if (error != null) {
+          return reason != null ? '$error: $reason' : '$error';
+        }
+      }
+      if (detail is List && detail.isNotEmpty) {
+        final messages = detail
+            .map((e) => e is Map ? e['msg']?.toString() : e.toString())
+            .whereType<String>()
+            .toList();
+        if (messages.isNotEmpty) return messages.join('; ');
+      }
+    }
+  } catch (_) {
+    // not JSON — fall through to the raw body below
+  }
+  return response.body.isNotEmpty
+      ? response.body
+      : 'Request failed (${response.statusCode})';
+}
+
+/// A dismissible error banner used by both timetable screens.
+class ErrorBanner extends StatelessWidget {
+  const ErrorBanner({super.key, required this.message, required this.onDismiss});
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline, color: scheme.onErrorContainer, size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Text(message, style: TextStyle(color: scheme.onErrorContainer))),
+          InkWell(
+            onTap: onDismiss,
+            borderRadius: BorderRadius.circular(16),
+            child: Icon(Icons.close, color: scheme.onErrorContainer, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A numbered section card — gives a form a step-by-step feel without a
+/// full wizard/stepper widget. Used by both timetable screens.
+class SectionCard extends StatelessWidget {
+  const SectionCard({
+    super.key,
+    required this.step,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+    required this.child,
+  });
+
+  final int step;
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 13,
+                  backgroundColor: theme.colorScheme.primaryContainer,
+                  child: Text(
+                    '$step',
+                    style: TextStyle(
+                      color: theme.colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Text(title, style: theme.textTheme.titleMedium)),
+                if (trailing != null) trailing!,
+              ],
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.only(left: 38),
+                child: Text(
+                  subtitle!,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A College dropdown that loads its own options from Supabase (`colleges`
+/// table) and manages its loading/error/retry state internally — used by
+/// both timetable screens.
+class CollegeDropdownField extends StatefulWidget {
+  const CollegeDropdownField({
+    super.key,
+    required this.onChanged,
+    this.initialValue,
+    this.enabled = true,
+  });
+
+  final ValueChanged<String?> onChanged;
+  final String? initialValue;
+  final bool enabled;
+
+  @override
+  State<CollegeDropdownField> createState() => _CollegeDropdownFieldState();
+}
+
+class _CollegeDropdownFieldState extends State<CollegeDropdownField> {
+  List<Map<String, dynamic>> _colleges = [];
+  bool _loading = true;
+  String? _error;
+  String? _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.initialValue;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows =
+          await supabase.from('colleges').select('id, name').order('name', ascending: true);
+      if (!mounted) return;
+      setState(() {
+        _colleges = List<Map<String, dynamic>>.from(rows);
+        _loading = false;
+        // TODO: default this to the logged-in admin's own college once a
+        // user-profile fetch (users -> college_id) exists, instead of
+        // leaving it for them to pick every time.
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Could not load colleges: $e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          children: [
+            SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(width: 12),
+            Text('Loading colleges...'),
+          ],
+        ),
+      );
+    }
+
+    if (_error != null) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Expanded(child: Text(_error!, style: Theme.of(context).textTheme.bodySmall)),
+            TextButton(onPressed: _load, child: const Text('Retry')),
+          ],
+        ),
+      );
+    }
+
+    return DropdownButtonFormField<String>(
+      initialValue: _selected,
+      decoration: const InputDecoration(
+        labelText: 'College',
+        prefixIcon: Icon(Icons.location_city_outlined),
+      ),
+      isExpanded: true,
+      items: _colleges
+          .map(
+            (c) => DropdownMenuItem<String>(
+              value: c['id'] as String,
+              child: Text(
+                (c['name'] as String?) ?? c['id'] as String,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          )
+          .toList(),
+      onChanged: widget.enabled
+          ? (v) {
+              setState(() => _selected = v);
+              widget.onChanged(v);
+            }
+          : null,
+    );
+  }
+}
